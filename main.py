@@ -1,3 +1,9 @@
+import Cls_Strategy
+import Cls_TradingBot
+import Mod_BTC
+import Mod_retrieveData
+import Mod_HPC_environment
+
 # Génération des signaux de prise de position
 sub_data = df_sub_from_dates(data,date_from,date_to)
 

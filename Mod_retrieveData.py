@@ -1,4 +1,3 @@
-import yfinance as yf
 import pandas as pd
 
 #https://fr.finance.yahoo.com/quote/GC%3DF/futures/
@@ -45,40 +44,44 @@ def history(self, period="1mo", interval="1d",
                 Optional. If passed as False, will suppress
                 error message printing to console.
     """
-try:
-    # get historical market data
-    hist_msft = pd.read_csv(r"C:\Users\Do\Documents\HISTORIC_DATA\hist_msft.csv")
-    hist_tsla = pd.read_csv(r"C:\Users\Do\Documents\HISTORIC_DATA\hist_tsla.csv")
-    hist_dji = pd.read_csv(r"C:\Users\Do\Documents\HISTORIC_DATA\hist_dji.csv")
-    hist_gold = pd.read_csv(r"C:\Users\Do\Documents\HISTORIC_DATA\hist_gold.csv")
-    hist_btc = pd.read_csv(r"C:\Users\Do\Documents\HISTORIC_DATA\hist_btc.csv")
-    print("Historical data loaded")
+def load_market_data(data_dir):
+    """
+    Charge les données locales si disponibles, sinon télécharge via yfinance.
+    """
+    data_dir = str(data_dir)
+    try:
+        hist_msft = pd.read_csv(rf"{data_dir}\hist_msft.csv")
+        hist_tsla = pd.read_csv(rf"{data_dir}\hist_tsla.csv")
+        hist_dji = pd.read_csv(rf"{data_dir}\hist_dji.csv")
+        hist_gold = pd.read_csv(rf"{data_dir}\hist_gold.csv")
+        hist_btc = pd.read_csv(rf"{data_dir}\hist_btc.csv")
+        print("Historical data loaded")
+        return hist_msft, hist_tsla, hist_dji, hist_gold, hist_btc
+    except FileNotFoundError:
+        print("WARNING - files not saved")
 
-except(FileNotFoundError):
-    print("WARNING - files not saved")
+    import yfinance as yf
 
-    # get historical market data
     msft = yf.Ticker("MSFT")
     tsla = yf.Ticker("TSLA")
     dji = yf.Ticker("^DJI")
     gold = yf.Ticker("GC=F")
     btcusd = yf.Ticker("BTC-USD")
-    
-    
-    # get all stock info
-    msft.info
-    
-    # get historical market data
+
     hist_msft = msft.history(period="10y")
     hist_tsla = tsla.history(period="10y")
     hist_dji = dji.history(period="10y")
     hist_gold = gold.history(period="10y")
-    hist_btc = gold.history(period="10y")
+    hist_btc = btcusd.history(period="10y")
 
-    # save historical market data
-    hist_msft = hist_msft.to_csv(r"C:\Users\Do\Documents\HISTORIC_DATA\hist_msft.csv")
-    hist_tsla = hist_tsla.to_csv(r"C:\Users\Do\Documents\HISTORIC_DATA\hist_tsla.csv")
-    hist_dji = hist_dji.to_csv(r"C:\Users\Do\Documents\HISTORIC_DATA\hist_dji.csv")
-    hist_gold = hist_gold.to_csv(r"C:\Users\Do\Documents\HISTORIC_DATA\hist_gold.csv")
-    hist_btc = hist_btc.to_csv(r"C:\Users\Do\Documents\HISTORIC_DATA\hist_btc.csv")
+    hist_msft.to_csv(rf"{data_dir}\hist_msft.csv")
+    hist_tsla.to_csv(rf"{data_dir}\hist_tsla.csv")
+    hist_dji.to_csv(rf"{data_dir}\hist_dji.csv")
+    hist_gold.to_csv(rf"{data_dir}\hist_gold.csv")
+    hist_btc.to_csv(rf"{data_dir}\hist_btc.csv")
     print("Historical data saved")
+    return hist_msft, hist_tsla, hist_dji, hist_gold, hist_btc
+
+
+if __name__ == "__main__":
+    load_market_data(r"C:\Users\Do\Documents\HISTORIC_DATA")

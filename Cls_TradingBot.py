@@ -80,7 +80,7 @@ class TradingBot:
                         self.log += f"Stop-loss atteint pour la position longue, ID: {elem}\n"
                         self.exit_position(elem,price)
                     else:
-                        self.log += f"Position {cursor["position"]}. perf : {(price - cursor["entry_price"]) / cursor["entry_price"]}. ID : {elem}\n"
+                        self.log += f"Position {cursor['position']}. perf : {(price - cursor['entry_price']) / cursor['entry_price']}. ID : {elem}\n"
                 
                 elif cursor["position"] == 'short':
                     if (cursor["entry_price"] - price) / cursor["entry_price"] >= self.take_profit:
@@ -90,7 +90,7 @@ class TradingBot:
                         self.log += f"Stop-loss atteint pour la position courte, ID: {elem}\n"
                         self.exit_position(elem,price)
                     else:
-                        self.log += f"Position {cursor["position"]}. perf : {(price - cursor["entry_price"]) / cursor["entry_price"]}. ID : {elem}\n"
+                        self.log += f"Position {cursor['position']}. perf : {(price - cursor['entry_price']) / cursor['entry_price']}. ID : {elem}\n"
     
     def run_strategy(self, prices, signals):
         """
@@ -111,7 +111,7 @@ class TradingBot:
         print(self.log)
 
     def Pnl(self):   
-        return dict_sum(self.orders)
+        return sum_pnl(self.orders)
 
     def generate_orderId(self):
         rand_id = np.random.randint(100000,999999)
@@ -123,16 +123,16 @@ class TradingBot:
             return rand_id
             
 
-def dict_sum(dict):
-    sum = 0
-    for id in dict.keys():
-        sum += dict[id]["P/L"]
-    return sum
+def sum_pnl(orders):
+    total = 0
+    for order_id in orders.keys():
+        total += orders[order_id]["P/L"]
+    return total
         
-def convert(dict,lst):
-    return [dict[i] for i in lst]
+def convert(mapping, lst):
+    return [mapping[i] for i in lst]
 
-dict = {
+SIGNAL_MAP = {
     0:'hold', 
     1:'buy',
     -1:'sell'
@@ -155,10 +155,11 @@ def detect_trend(prices):
         res = "hausse"
     elif mn < 0:
         res = "baisse"
-    elif res > 0.001:
+    elif abs(mn) <= 0.001:
         res = "stable"
     return res
 
-# Exemple
-prices = [100, 102, 105, 103, 107]
-print(detect_trend(prices))  # Devrait renvoyer "hausse"
+if __name__ == "__main__":
+    # Exemple
+    prices = [100, 102, 105, 103, 107]
+    print(detect_trend(prices))  # Devrait renvoyer "hausse"

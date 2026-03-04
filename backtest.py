@@ -25,6 +25,11 @@ class BacktestConfig:
     allow_short: bool = True
     stop_loss: float = 0.02
     take_profit: float = 0.04
+    signal_mode: str = "entries"  # "entries" or "target"
+    use_atr_sl_tp: bool = False
+    atr_window: int = 14
+    atr_stop_mult: float = 2.0
+    atr_take_mult: float = 3.0
     close_on_end: bool = True
     price_col: str = "Close"
     open_col: str = "Open"
@@ -40,12 +45,18 @@ class Trade:
     side: str
     entry_price: float
     exit_price: float
+    stop_loss_pct: float
+    take_profit_pct: float
+    stop_price: float
+    take_price: float
     units: float
     notional: float
     pnl: float
     return_pct: float
     duration_bars: int
     exit_reason: str
+    entry_fee: float
+    exit_fee: float
 
 
 @dataclass
@@ -59,8 +70,17 @@ class BacktestResult:
 class Backtester:
     def __init__(self, data: pd.DataFrame, signals: List[int], config: BacktestConfig):
         self.data = data.copy()
-        self.signals = np.asarray(signals, dtype=float)
+        self.signals = np.asarray(self._coerce_signals(signals), dtype=float)
         self.config = config
+
+    def _coerce_signals(self, signals):
+        if len(signals) == 0:
+            return signals
+        sample = signals[0]
+        if isinstance(sample, str):
+            mapping = {"buy": 1, "sell": -1, "hold": 0}
+            return [mapping.get(str(s).lower(), 0) for s in signals]
+        return signals
 
     def run(self) -> BacktestResult:
         df = self._prepare_data(self.data)
@@ -84,25 +104,60 @@ class Backtester:
 
             signal = int(self.signals[i - 1])
 
-            if position is not None:
-                if self._signal_is_exit(position["side"], signal):
-                    exit_price = self._apply_slippage(open_price, side=position["side"], is_entry=False)
-                    cash, trade = self._close_position(position, cash, exit_price, timestamp, "signal_flip", i)
-                    trades.append(trade)
-                    position = None
+            if self.config.signal_mode == "target":
+                target = signal
+                if position is not None:
+                    if target == 0:
+                        exit_price = self._apply_slippage(open_price, side=position["side"], is_entry=False)
+                        cash, trade = self._close_position(position, cash, exit_price, timestamp, "target_flat", i)
+                        trades.append(trade)
+                        position = None
+                    elif target == 1 and position["side"] == "short":
+                        exit_price = self._apply_slippage(open_price, side=position["side"], is_entry=False)
+                        cash, trade = self._close_position(position, cash, exit_price, timestamp, "target_flip", i)
+                        trades.append(trade)
+                        position = None
+                    elif target == -1 and position["side"] == "long":
+                        exit_price = self._apply_slippage(open_price, side=position["side"], is_entry=False)
+                        cash, trade = self._close_position(position, cash, exit_price, timestamp, "target_flip", i)
+                        trades.append(trade)
+                        position = None
 
-            if position is None:
-                if self._signal_is_entry(signal):
-                    side = "long" if signal > 0 else "short"
+                if position is None and target != 0:
+                    side = "long" if target > 0 else "short"
                     if (side == "long" and self.config.allow_long) or (side == "short" and self.config.allow_short):
                         entry_price = self._apply_slippage(open_price, side=side, is_entry=True)
+                        atr_value = float(row["ATR"]) if "ATR" in row and pd.notna(row["ATR"]) else None
                         position, cash = self._open_position(
                             side=side,
                             entry_price=entry_price,
                             cash=cash,
                             timestamp=timestamp,
                             bar_index=i,
+                            atr_value=atr_value,
                         )
+            else:
+                if position is not None:
+                    if self._signal_is_exit(position["side"], signal):
+                        exit_price = self._apply_slippage(open_price, side=position["side"], is_entry=False)
+                        cash, trade = self._close_position(position, cash, exit_price, timestamp, "signal_flip", i)
+                        trades.append(trade)
+                        position = None
+
+                if position is None:
+                    if self._signal_is_entry(signal):
+                        side = "long" if signal > 0 else "short"
+                        if (side == "long" and self.config.allow_long) or (side == "short" and self.config.allow_short):
+                            entry_price = self._apply_slippage(open_price, side=side, is_entry=True)
+                            atr_value = float(row["ATR"]) if "ATR" in row and pd.notna(row["ATR"]) else None
+                            position, cash = self._open_position(
+                                side=side,
+                                entry_price=entry_price,
+                                cash=cash,
+                                timestamp=timestamp,
+                                bar_index=i,
+                                atr_value=atr_value,
+                            )
 
             if position is not None:
                 stop_hit, take_hit, exit_price, reason = self._check_stop_take(position, high_price, low_price)
@@ -159,6 +214,17 @@ class Backtester:
         df["High"] = df[self.config.high_col].astype(float) if self.config.high_col in df.columns else df["Close"]
         df["Low"] = df[self.config.low_col].astype(float) if self.config.low_col in df.columns else df["Close"]
         df = df.dropna(subset=["Open", "High", "Low", "Close"])
+        if self.config.use_atr_sl_tp:
+            prev_close = df["Close"].shift(1)
+            tr = pd.concat(
+                [
+                    (df["High"] - df["Low"]).abs(),
+                    (df["High"] - prev_close).abs(),
+                    (df["Low"] - prev_close).abs(),
+                ],
+                axis=1,
+            ).max(axis=1)
+            df["ATR"] = tr.rolling(self.config.atr_window).mean()
         return df.reset_index(drop=True)
 
     def _signal_is_entry(self, signal: int) -> bool:
@@ -178,13 +244,20 @@ class Backtester:
         cash: float,
         timestamp: Optional[pd.Timestamp],
         bar_index: int,
+        atr_value: Optional[float],
     ):
-        if self.config.stop_loss <= 0:
+        stop_loss = self.config.stop_loss
+        take_profit = self.config.take_profit
+        if self.config.use_atr_sl_tp and atr_value is not None and atr_value > 0:
+            stop_loss = (atr_value * self.config.atr_stop_mult) / entry_price
+            take_profit = (atr_value * self.config.atr_take_mult) / entry_price
+
+        if stop_loss <= 0:
             raise ValueError("stop_loss doit être > 0")
 
         equity = cash
         risk_budget = equity * self.config.risk_per_trade
-        position_notional = risk_budget / self.config.stop_loss
+        position_notional = risk_budget / stop_loss
         max_notional = equity * self.config.max_leverage
         position_notional = max(0.0, min(position_notional, max_notional))
         if position_notional == 0.0:
@@ -194,6 +267,13 @@ class Backtester:
         fee = position_notional * (self.config.fee_bps / 10_000.0)
         cash -= fee
 
+        if side == "long":
+            stop_price = entry_price * (1 - stop_loss)
+            take_price = entry_price * (1 + take_profit)
+        else:
+            stop_price = entry_price * (1 + stop_loss)
+            take_price = entry_price * (1 - take_profit)
+
         position = {
             "side": side,
             "entry_price": entry_price,
@@ -201,8 +281,10 @@ class Backtester:
             "units": units,
             "notional": position_notional,
             "entry_bar": bar_index,
-            "stop_loss": self.config.stop_loss,
-            "take_profit": self.config.take_profit,
+            "stop_loss": stop_loss,
+            "take_profit": take_profit,
+            "stop_price": stop_price,
+            "take_price": take_price,
             "entry_fee": fee,
         }
         return position, cash
@@ -218,10 +300,11 @@ class Backtester:
     ):
         pnl = self._realized_pnl(position, exit_price)
         exit_notional = position["units"] * exit_price
-        fee = exit_notional * (self.config.fee_bps / 10_000.0)
-        cash += pnl - fee
+        exit_fee = exit_notional * (self.config.fee_bps / 10_000.0)
+        cash += pnl - exit_fee
 
-        net_pnl = pnl - fee - position.get("entry_fee", 0.0)
+        entry_fee = position.get("entry_fee", 0.0)
+        net_pnl = pnl - exit_fee - entry_fee
         return_pct = net_pnl / position["notional"] if position["notional"] else 0.0
         trade = Trade(
             entry_time=position["entry_time"],
@@ -229,12 +312,18 @@ class Backtester:
             side=position["side"],
             entry_price=position["entry_price"],
             exit_price=exit_price,
+            stop_loss_pct=position["stop_loss"],
+            take_profit_pct=position["take_profit"],
+            stop_price=position["stop_price"],
+            take_price=position["take_price"],
             units=position["units"],
             notional=position["notional"],
             pnl=net_pnl,
             return_pct=return_pct,
             duration_bars=bar_index - position.get("entry_bar", bar_index),
             exit_reason=reason,
+            entry_fee=entry_fee,
+            exit_fee=exit_fee,
         )
         return cash, trade
 
@@ -255,12 +344,10 @@ class Backtester:
         return price * (1 - slip) if is_entry else price * (1 + slip)
 
     def _check_stop_take(self, position: Dict[str, float], high: float, low: float):
-        stop_loss = position["stop_loss"]
-        take_profit = position["take_profit"]
+        stop_price = position["stop_price"]
+        take_price = position["take_price"]
 
         if position["side"] == "long":
-            stop_price = position["entry_price"] * (1 - stop_loss)
-            take_price = position["entry_price"] * (1 + take_profit)
             stop_hit = low <= stop_price
             take_hit = high >= take_price
             if stop_hit and take_hit:
@@ -270,8 +357,6 @@ class Backtester:
             if take_hit:
                 return False, True, take_price, "take_profit"
         else:
-            stop_price = position["entry_price"] * (1 + stop_loss)
-            take_price = position["entry_price"] * (1 - take_profit)
             stop_hit = high >= stop_price
             take_hit = low <= take_price
             if stop_hit and take_hit:

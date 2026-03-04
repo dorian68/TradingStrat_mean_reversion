@@ -24,11 +24,18 @@ def timer(function):
         
     return fct_in_between
 
+def _coerce_datetime(value: str):
+    dt = pd.to_datetime(value, format=DATE_FORMAT, errors="coerce")
+    if dt is pd.NaT:
+        dt = pd.to_datetime(value, errors="coerce")
+    return dt
+
+
 def df_sub_from_dates(data, date_from, date_to):
-    obj_date_from = pd.to_datetime(date_from, format=DATE_FORMAT, errors="coerce")
-    obj_date_to = pd.to_datetime(date_to, format=DATE_FORMAT, errors="coerce")
+    obj_date_from = _coerce_datetime(date_from)
+    obj_date_to = _coerce_datetime(date_to)
     if obj_date_from is pd.NaT or obj_date_to is pd.NaT:
-        raise ValueError(f"Dates invalides. Format attendu: {DATE_FORMAT}")
+        raise ValueError(f"Dates invalides. Formats attendus: {DATE_FORMAT} ou ISO")
 
     sub_data = data[(data["Timestamp"] > obj_date_from) & (data["Timestamp"] < obj_date_to)]
     return sub_data.ffill()
@@ -54,6 +61,20 @@ def load_btc_data(csv_path=None, date_from=DEFAULT_DATE_FROM, date_to=DEFAULT_DA
 
     if csv_path and csv_path.exists():
         df = pd.read_csv(csv_path)
+        lower_map = {c.lower(): c for c in df.columns}
+        if "timestamp" in lower_map:
+            df.rename(columns={lower_map["timestamp"]: "Timestamp"}, inplace=True)
+        if "date" in lower_map and "Timestamp" not in df.columns:
+            df.rename(columns={lower_map["date"]: "Timestamp"}, inplace=True)
+        if "close" in lower_map:
+            df.rename(columns={lower_map["close"]: "Close"}, inplace=True)
+        if "open" in lower_map:
+            df.rename(columns={lower_map["open"]: "Open"}, inplace=True)
+        if "high" in lower_map:
+            df.rename(columns={lower_map["high"]: "High"}, inplace=True)
+        if "low" in lower_map:
+            df.rename(columns={lower_map["low"]: "Low"}, inplace=True)
+
         if "Timestamp" in df.columns:
             if pd.api.types.is_numeric_dtype(df["Timestamp"]):
                 df["Timestamp"] = pd.to_datetime(df["Timestamp"], unit="s", errors="coerce")
@@ -64,8 +85,6 @@ def load_btc_data(csv_path=None, date_from=DEFAULT_DATE_FROM, date_to=DEFAULT_DA
         else:
             raise ValueError("Le CSV doit contenir une colonne 'Timestamp' ou 'Date'.")
 
-        if "Close" not in df.columns and "close" in df.columns:
-            df["Close"] = df["close"]
         if "Close" not in df.columns:
             raise ValueError("Le CSV doit contenir une colonne 'Close'.")
 

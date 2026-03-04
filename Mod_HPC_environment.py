@@ -4,7 +4,6 @@ import pandas as pd
 from dask import delayed
 
 from Cls_Strategy import Strategy
-from Cls_TradingBot import convert, SIGNAL_MAP
 from Mod_BTC import DEFAULT_DATE_FROM, data, df_sub_from_dates, sub_bitcoin_historic, timer
 from backtest import BacktestConfig, Backtester
 
@@ -102,7 +101,7 @@ def backtest_mean_reversion(MA, threshold,stop_loss=0.02, take_profit=0.04):
     signals = mean_rev.generate_signals()
     
     # Chargement des signaux
-    signals = convert(SIGNAL_MAP, list(signals["smooth_signal"]))
+    signals = list(signals["smooth_signal"])
 
     config = BacktestConfig(
         initial_cash=10_000.0,
